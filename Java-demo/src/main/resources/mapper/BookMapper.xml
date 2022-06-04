@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.demo.mapper.BookMapper">
+
+    <select id="BookList" resultType="Book">
+        select b.id, b.book_name, b.person_id, p.name
+        from book b
+            left join person p on b.person_id = p.id
+        where b.person_id = #{personId}
+    </select>
+
+    <insert id="addBook">
+        insert into book
+            <trim prefix="(" suffix=")" suffixOverrides=",">
+                <if test="bookName != null">book_name,</if>
+                <if test="personId != null">person_id,</if>
+            </trim>
+            <trim prefix="values (" suffix=")" suffixOverrides=",">
+                <if test="bookName != null">#{bookName},</if>
+                <if test="personId != null">#{personId},</if>
+            </trim>
+    </insert>
+
+    <update id="updateBook" parameterType="Book">
+        update book
+        <trim prefix="SET" suffixOverrides=",">
+            <if test="bookName != null">book_name = #{bookName},</if>
+            <if test="personId != null">person_id = #{personId},</if>
+        </trim>
+        where id = #{id}
+    </update>
+
+    <delete id="delectBook" parameterType="int">
+        delete from book where id = #{id}
+    </delete>
+
+    <delete id="delBooks">
+        delete from book where id in
+        <foreach collection="list" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </delete>
+
+
+
+
+
+
+</mapper>
