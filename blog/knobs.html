@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <style>
+        canvas {
+            border: 1px solid #ccc;
+            width: 100vw;
+            height: 100vh;
+            touch-action: none;
+        }
+
+        .debug {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            font-family: monospace;
+            white-space: pre-wrap;
+        }
+
+        .area-box {
+            position: fixed;
+            top: 0;
+            right: 0;
+        }
+
+        .area {
+            width: 300px;
+            height: 300px;
+            margin-top: 20px;
+        }
+
+        .area1 {
+            background-color: rgb(210, 62, 62);
+        }
+
+        .area2 {
+            background-color: rgb(135, 170, 219);
+        }
+
+        .area3 {
+            background-color: rgb(103, 201, 151);
+        }
+    </style>
+</head>
+
+<body>
+    <canvas></canvas>
+    <div class="debug" id="debug"></div>
+    <div class="area-box">
+        <div class="area area1" id="area1">area1</div>
+        <div class="area area2" id="area2">area2</div>
+        <div class="area area3" id="area3">area3</div>
+    </div>
+
+    <script>
+        const canvas = document.querySelector('canvas');
+        const ctx = canvas.getContext('2d');
+        const debugDiv = document.getElementById('debug');
+
+        // 设备配置列表
+        const deviceList = [
+            {
+                angles: [77.10, 34.66, 68.03],
+                angleTolerance: 10,
+                name: "绿色",
+                touchIds: new Set(),
+                color: '#00ff0080',
+                lastValidPositions: [],
+                rotation: { baseAngle: null, total: 0, delta: 0, direction: '' }
+            },
+            {
+                angles: [60, 60, 60],
+                angleTolerance: 10,
+                name: "蓝色",
+                touchIds: new Set(),
+                color: '#0000ff80',
+                lastValidPositions: [],
+                rotation: { baseAngle: null, total: 0, delta: 0, direction: '' }
+            },
+            {
+                angles: [90, 45, 45],
+                angleTolerance: 10,
+                name: "橙色",
+                touchIds: new Set(),
+                color: '#ffa50080',
+                lastValidPositions: [],
+                rotation: { baseAngle: null, total: 0, delta: 0, direction: '' }
+            }
+        ];
+
+        let currentTouches = new Map();
+        const TOUCH_TIMEOUT = 300;
+        let dropAreas = [];
+
+        function initArea() {
+            dropAreas = ['area1', 'area2', 'area3'].map((id, index) => {
+                const element = document.getElementById(id);
+                if (!element) return null;
+                const rect = element.getBoundingClientRect();
+                return { id, index, left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
+            }).filter(Boolean);
+        }
+        initArea();
+
+        const checkOverDropAreasOptimized = (x, y, dropAreas) => {
+            for (const area of dropAreas) {
+                if (x >= area.left && x <= area.right && y >= area.top && y <= area.bottom) {
+                    return area.id;
+                }
+            }
+            return null;
+        };
+
+        function initCanvas() {
+            const dpr = window.devicePixelRatio || 1;
+            const rect = canvas.getBoundingClientRect();
+            canvas.width = rect.width * dpr;
+            canvas.height = rect.height * dpr;
+            ctx.scale(dpr, dpr);
+        }
+        initCanvas();
+        window.addEventListener('resize', initCanvas);
+
+        // 事件处理（新增旋转检测）
+        canvas.addEventListener('touchstart', handleTouchStart);
+        canvas.addEventListener('touchmove', handleTouchMove);
+        canvas.addEventListener('touchend', handleTouchEnd);
+        canvas.addEventListener('touchcancel', handleTouchEnd);
+
+        function handleTouchStart(e) {
+            e.preventDefault();
+            updateTouches(e.touches);
+            processDeviceBindings(true);
+            requestAnimationFrame(draw);
+        }
+
+        function handleTouchMove(e) {
+            e.preventDefault();
+            updateTouches(e.touches);
+            // 绑定touchIds
+            processDeviceBindings(false);
+
+            // 验证旋钮设备的角度是否符合
+            validateActiveDevices();
+
+            // 处理触点丢失问题
+            processTemporaryLoss();
+            // 旋转方向检测（顺时针，逆时针）
+            detectRotations();
+            // canvas渲染结果
+            requestAnimationFrame(draw);
+        }
+
+        function handleTouchEnd(e) {
+            e.preventDefault();
+            updateTouches(e.touches);
+            processTouchRelease(e.changedTouches);
+            requestAnimationFrame(draw);
+        }
+
+        // 旋转检测功能
+        function detectRotations() {
+            deviceList.forEach(device => {
+                if (device.touchIds.size !== 3) return;
+
+                const points = Array.from(device.touchIds)
+                    .map(id => currentTouches.get(id))
+                    .filter(Boolean);
+
+                if (points.length === 3) {
+                    const currentAngle = calculateBaseAngle(points);
+                    if (device.rotation.baseAngle === null) {
+                        device.rotation.baseAngle = currentAngle;
+                        return;
+                    }
+
+                    let delta = currentAngle - device.rotation.baseAngle;
+                    delta = ((delta + 180) % 360) - 180;
+
+                    device.rotation.delta = delta;
+                    device.rotation.total += delta;
+                    device.rotation.direction = delta > 1 ? '顺时针' : delta < -1 ? '逆时针' : '';
+                    device.rotation.baseAngle = currentAngle;
+                }
+            });
+        }
+
+        function calculateBaseAngle(points) {
+            const vec = { x: points[1].x - points[0].x, y: points[1].y - points[0].y };
+            return Math.atan2(vec.y, vec.x) * 180 / Math.PI;
+        }
+
+        // 更新绘制函数
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            let debugInfo = '';
+
+            deviceList.forEach(device => {
+                if (device.touchIds.size === 3) {
+                    const points = Array.from(device.touchIds)
+                        .map(id => currentTouches.get(id))
+                        .filter(Boolean);
+
+                    if (points.length === 3) {
+                        points.forEach(p => {
+                            ctx.beginPath();
+                            ctx.arc(p.x, p.y, 15, 0, Math.PI * 2);
+                            ctx.fillStyle = device.color;
+                            ctx.fill();
+                        });
+
+                        // 绘制旋转箭头
+                        if (Math.abs(device.rotation.delta) > 1) {
+                            const center = calculateCenter(points);
+                            ctx.beginPath();
+                            ctx.moveTo(center.x, center.y);
+                            ctx.lineTo(center.x + (device.rotation.delta > 0 ? 40 : -40), center.y);
+                            ctx.strokeStyle = device.rotation.delta > 0 ? '#00FF00' : '#FF0000';
+                            ctx.lineWidth = 4;
+                            ctx.stroke();
+                        }
+
+                        const angles = calculateAngles(points).map(v => v.toFixed(2));
+                        const center = calculateCenter(points);
+                        const moveResult = checkOverDropAreasOptimized(center.x, center.y, dropAreas);
+
+                        debugInfo += `${device.name} 激活\n`;
+                        debugInfo += `▸ 角度: ${angles.join('°, ')}\n`;
+                        debugInfo += `▸ 方向: ${device.rotation.direction.padEnd(6)} `;
+                        debugInfo += `转速: ${Math.abs(device.rotation.delta).toFixed(1)}°/帧\n`;
+                        debugInfo += `▸ 中心: (${center.x.toFixed(1)}, ${center.y.toFixed(1)}) → ${moveResult}\n\n`;
+                    }
+                }
+            });
+
+            /* const unboundCombinations = getUnboundCombinations();
+            unboundCombinations.forEach(({ points, matchedDevices }) => {
+                points.forEach(p => {
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, 15, 0, Math.PI * 2);
+                    ctx.fillStyle = matchedDevices.length ? '#00ff0080' : '#ff000080';
+                    ctx.fill();
+                });
+
+                if (matchedDevices.length) {
+                    const angles = calculateAngles(points).map(v => v.toFixed(2));
+                    const center = calculateCenter(points);
+                    debugInfo += `检测到: ${matchedDevices.map(d => d.name).join(', ')}\n`;
+                    debugInfo += `角度: ${angles.join('°, ')}\n`;
+                    debugInfo += `中心: (${center.x.toFixed(1)}, ${center.y.toFixed(1)})\n\n`;
+                }
+            }); */
+
+            debugDiv.textContent = debugInfo || '等待设备输入...';
+        }
+
+        function updateTouches(touchList) {
+            const rect = canvas.getBoundingClientRect();
+
+            console.log('rect', rect)
+
+            const now = Date.now();
+            const newTouches = new Map();
+            currentTouches.forEach((touch, id) => {
+                if (now - touch.timestamp < TOUCH_TIMEOUT) {
+                    newTouches.set(id, { ...touch, active: false });
+                }
+            });
+            Array.from(touchList).forEach(t => {
+                newTouches.set(t.identifier, {
+                    x: t.clientX - rect.left,
+                    y: t.clientY - rect.top,
+                    identifier: t.identifier,
+                    timestamp: Date.now(),
+                    active: true
+                });
+            });
+            currentTouches = newTouches;
+        }
+
+        function processDeviceBindings(isNewTouch) {
+            const activeTouches = Array.from(currentTouches.values()).filter(t => t.active);
+            if (isNewTouch) {
+                deviceList.forEach(device => {
+                    const activeCount = Array.from(device.touchIds)
+                        .filter(id => activeTouches.some(t => t.identifier === id)).length;
+                    if (activeCount < 3) device.touchIds.clear();
+                });
+            }
+            get3PointCombinations(activeTouches).forEach(trio => {
+                const matchedDevice = findBestMatch(trio);
+                if (matchedDevice) {
+                    deviceList.forEach(d => {
+                        if (d !== matchedDevice && hasCommonTouches(d.touchIds, trio)) {
+                            d.touchIds.clear();
+                        }
+                    });
+                    matchedDevice.touchIds = new Set(trio.map(t => t.identifier));
+                    updateDevicePositions(matchedDevice);
+                }
+            });
+        }
+
+        function findBestMatch(trio) {
+            let bestDevice = null;
+            let minDiff = Infinity;
+            deviceList.forEach(device => {
+                const diff = calculateAngleDiff(trio, device);
+                if (diff <= device.angleTolerance && diff < minDiff) {
+                    bestDevice = device;
+                    minDiff = diff;
+                }
+            });
+            return bestDevice;
+        }
+
+        function calculateAngleDiff(trio, device) {
+            const angles = calculateAngles(trio).sort((a, b) => a - b);
+            const deviceAngles = [...device.angles].sort((a, b) => a - b);
+            return deviceAngles.reduce((sum, a, i) => sum + Math.abs(a - angles[i]), 0);
+        }
+
+        function hasCommonTouches(idsSet, trio) {
+            return trio.some(t => idsSet.has(t.identifier));
+        }
+
+        function validateActiveDevices() {
+            deviceList.forEach(device => {
+                if (device.touchIds.size === 3) {
+                    const activePoints = Array.from(device.touchIds)
+                        .map(id => currentTouches.get(id))
+                        .filter(t => t?.active);
+                    if (activePoints.length < 3) device.touchIds.clear();
+                    else updateDevicePositions(device);
+                }
+            });
+        }
+
+        function updateDevicePositions(device) {
+            device.lastValidPositions = Array.from(device.touchIds)
+                .map(id => ({ ...currentTouches.get(id) }));
+        }
+
+        function processTemporaryLoss() {
+            deviceList.forEach(device => {
+                if (device.touchIds.size === 3) {
+                    const lostIds = Array.from(device.touchIds)
+                        .filter(id => !currentTouches.get(id)?.active);
+                    if (lostIds.length === 1) {
+                        const lostId = lostIds[0];
+                        const lastPos = device.lastValidPositions.find(p => p.identifier === lostId);
+                        if (lastPos && Date.now() - lastPos.timestamp < TOUCH_TIMEOUT) {
+                            currentTouches.set(lostId, { ...lastPos, active: false });
+                        }
+                    }
+                }
+            });
+        }
+
+        function processTouchRelease(endedTouches) {
+            Array.from(endedTouches || []).forEach(t => {
+                deviceList.forEach(device => {
+                    if (device.touchIds.has(t.identifier)) {
+                        device.touchIds.delete(t.identifier);
+                        if (device.touchIds.size === 0) device.lastValidPositions = [];
+                    }
+                });
+            });
+        }
+
+        function get3PointCombinations(points) {
+            const combinations = [];
+            for (let i = 0; i < points.length; i++) {
+                for (let j = i + 1; j < points.length; j++) {
+                    for (let k = j + 1; k < points.length; k++) {
+                        combinations.push([points[i], points[j], points[k]]);
+                    }
+                }
+            }
+            return combinations;
+        }
+
+        function getUnboundCombinations() {
+            const boundIds = new Set(deviceList.flatMap(d => [...d.touchIds]));
+            const activeTouches = Array.from(currentTouches.values())
+                .filter(t => t.active && !boundIds.has(t.identifier));
+            return get3PointCombinations(activeTouches).map(points => ({
+                points,
+                matchedDevices: deviceList.filter(d => isDeviceMatch(points, d))
+            }));
+        }
+
+        function isDeviceMatch(points, device) {
+            const angles = calculateAngles(points).sort((a, b) => a - b);
+            const deviceAngles = [...device.angles].sort((a, b) => a - b);
+            return deviceAngles.every((a, i) => Math.abs(a - angles[i]) <= device.angleTolerance);
+        }
+
+        function calculateAngles(points) {
+            const vecAB = sub(points[1], points[0]);
+            const vecAC = sub(points[2], points[0]);
+            const vecBC = sub(points[2], points[1]);
+            const angleA = getAngle(vecAB, vecAC);
+            const angleB = getAngle(neg(vecAB), vecBC);
+            const angleC = 180 - angleA - angleB;
+            return [angleA, angleB, angleC];
+        }
+
+        function calculateCenter(points) {
+            return {
+                x: points.reduce((sum, p) => sum + p.x, 0) / 3,
+                y: points.reduce((sum, p) => sum + p.y, 0) / 3
+            };
+        }
+
+        function sub(a, b) { return { x: a.x - b.x, y: a.y - b.y } }
+        function neg(v) { return { x: -v.x, y: -v.y } }
+        function getAngle(v1, v2) {
+            const dot = v1.x * v2.x + v1.y * v2.y;
+            const mag1 = Math.hypot(v1.x, v1.y) || 0.01;
+            const mag2 = Math.hypot(v2.x, v2.y) || 0.01;
+            return Math.acos(dot / (mag1 * mag2)) * 180 / Math.PI;
+        }
+    </script>
+</body>
+
+</html>
