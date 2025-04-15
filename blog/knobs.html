@@ -239,7 +239,7 @@
                 }
             });
 
-            /* const unboundCombinations = getUnboundCombinations();
+            const unboundCombinations = getUnboundCombinations();
             unboundCombinations.forEach(({ points, matchedDevices }) => {
                 points.forEach(p => {
                     ctx.beginPath();
@@ -255,7 +255,7 @@
                     debugInfo += `角度: ${angles.join('°, ')}\n`;
                     debugInfo += `中心: (${center.x.toFixed(1)}, ${center.y.toFixed(1)})\n\n`;
                 }
-            }); */
+            });
 
             debugDiv.textContent = debugInfo || '等待设备输入...';
         }
